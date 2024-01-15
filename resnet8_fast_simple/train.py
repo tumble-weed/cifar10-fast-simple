@@ -5,7 +5,7 @@ import torch.nn as nn
 import torchvision
 import model
 import dutils
-dutils.pause()
+dutils.init()
 
 def train(seed=0):
     # Configurable parameters
@@ -170,6 +170,10 @@ def train(seed=0):
 
         print(f"{epoch:5} {batch_count:8d} {train_time:19.2f} {valid_acc:22.4f}")
     dutils.pause()
+    mypath = os.path.abspath(__file__)
+    mydir = os.path.dirname(mypath)
+    savepath = os.path.join(mydir,'checkpoint.pth')
+    torch.save(valid_model.state_dict(),savepath)
     return valid_acc
 
 def preprocess_data(data, device, dtype):
