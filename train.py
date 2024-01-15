@@ -4,7 +4,8 @@ import torch
 import torch.nn as nn
 import torchvision
 import model
-
+import dutils
+dutils.pause()
 
 def train(seed=0):
     # Configurable parameters
@@ -168,7 +169,7 @@ def train(seed=0):
         valid_acc = torch.mean(torch.cat(valid_correct)).item()
 
         print(f"{epoch:5} {batch_count:8d} {train_time:19.2f} {valid_acc:22.4f}")
-
+    dutils.pause()
     return valid_acc
 
 def preprocess_data(data, device, dtype):
@@ -273,6 +274,10 @@ def main():
         print(f"Mean accuracy: {mean} +- {std}")
         print()
 
+def train_one():
+    seed = 0
+    valid_acc = train(seed)
 
 if __name__ == "__main__":
-    main()
+    #main()
+    train_one()
