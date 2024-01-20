@@ -7,7 +7,7 @@ import model
 import dutils
 dutils.init()
 
-def train(seed=0):
+def train(seed=0,dataset=dutils.TODO):
     # Configurable parameters
     epochs = 10
     batch_size = 512
@@ -17,7 +17,12 @@ def train(seed=0):
     ema_update_freq = 5
     ema_rho = 0.99 ** ema_update_freq
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    dtype = torch.float16 if device.type != "cpu" else torch.float32
+    if False:
+        dtype = torch.float16 if device.type != "cpu" else torch.float32
+    else:
+        dtype = torch.float32
+    valid_dtype = dtype
+    #valid_dtype = dutils.hardcode(valid_dtype  = torch.float32)
 
     # First, the learning rate rises from 0 to 0.002 for the first 194 batches.
     # Next, the learning rate shrinks down to 0.0002 over the next 582 batches.
@@ -46,13 +51,19 @@ def train(seed=0):
     torch.backends.cudnn.benchmark = True
 
     # Load dataset
-    train_data, train_targets, valid_data, valid_targets = load_cifar10(device, dtype)
+    #train_data, train_targets, valid_data, valid_targets = load_cifar10(device, dtype,valid_dtype=valid_dtype)
+    train_data, train_targets, valid_data, valid_targets = load_dataset(dataset,device, dtype,valid_dtype=valid_dtype)
+    #if dutils.hack('use_vgg',default=True):
+    if True:   
+        import pytorch_vgg_cifar10.vgg
+        train_model= pytorch_vgg_cifar10.vgg.vgg16()
+        #dutils.pause()
+    else:
+        # Compute special weights for first layer
+        weights = model.patch_whitening(train_data[:10000, :, 4:-4, 4:-4])
 
-    # Compute special weights for first layer
-    weights = model.patch_whitening(train_data[:10000, :, 4:-4, 4:-4])
-
-    # Construct the neural network
-    train_model = model.Model(weights, c_in=3, c_out=10, scale_out=0.125)
+        # Construct the neural network
+        train_model = model.Model(weights, c_in=3, c_out=10, scale_out=0.125)
 
     # Convert model weights to half precision
     train_model.to(dtype)
@@ -128,6 +139,8 @@ def train(seed=0):
 
             loss.sum().backward()
 
+            # print("Train loss:", loss.mean(axis = 0).mean(axis=-1).cpu().detach().numpy())
+
             lr_index = min(batch_count, len(lr_schedule) - 1)
             lr = lr_schedule[lr_index]
             lr_bias = lr_schedule_bias[lr_index]
@@ -147,6 +160,12 @@ def train(seed=0):
         train_time += time.perf_counter() - start_time
 
         valid_correct = []
+        valid_model.to(valid_dtype)
+        # Convert BatchNorm back to single precision for better accuracy
+        for module in valid_model.modules():
+            if isinstance(module, nn.BatchNorm2d):
+                module.float()
+        valid_model = dutils.hardcode(valid_model = train_model)
         for i in range(0, len(valid_data), batch_size):
             valid_model.train(False)
 
@@ -164,7 +183,15 @@ def train(seed=0):
             correct = logits.max(dim=1)[1] == valid_targets[i : i + batch_size]
 
             valid_correct.append(correct.detach().type(torch.float64))
+        # Convert model weights to half precision
+        valid_model.to(dtype)
 
+        # Convert BatchNorm back to single precision for better accuracy
+        for module in valid_model.modules():
+            if isinstance(module, nn.BatchNorm2d):
+                module.float()
+
+ 
         # Accuracy is average number of correct predictions
         valid_acc = torch.mean(torch.cat(valid_correct)).item()
 
@@ -172,11 +199,12 @@ def train(seed=0):
     dutils.pause()
     mypath = os.path.abspath(__file__)
     mydir = os.path.dirname(mypath)
-    savepath = os.path.join(mydir,'checkpoint.pth')
+    savepath = os.path.join(mydir,f'{dataset}_checkpoint.pth')
+    dutils.pause()
     torch.save(valid_model.state_dict(),savepath)
     return valid_acc
 
-def preprocess_data(data, device, dtype):
+def preprocess_data_cifar(data, device, dtype):
     # Convert to torch float16 tensor
     data = torch.tensor(data, device=device).to(dtype)
 
@@ -189,14 +217,16 @@ def preprocess_data(data, device, dtype):
     data = data.permute(0, 3, 1, 2)
 
     return data
-
-
-def load_cifar10(device, dtype, data_dir="~/data"):
-    train = torchvision.datasets.CIFAR10(root=data_dir, download=True)
-    valid = torchvision.datasets.CIFAR10(root=data_dir, train=False)
-
-    train_data = preprocess_data(train.data, device, dtype)
-    valid_data = preprocess_data(valid.data, device, dtype)
+#TODO: cifar preproces mean etc copy from pytorch vgg repo? do it the other way around: copy this to pytorch vgg
+#TODO: preprocess mnist (some 0.13 etc?)
+#TODO: test it with mnist, cifar100
+def load_mnist(device, dtype,valid_dtype=None, data_dir="~/data"):
+    if valid_dtype is None:
+        valid_dtype = dtype
+    train = torchvision.datasets.MNIST(root=data_dir, download=True)
+    valid = torchvision.datasets.MNIST(root=data_dir, train=False)
+    train_data = preprocess_data_mnist(train.data, device, dtype)
+    valid_data = preprocess_data_mnist(valid.data, device, valid_dtype)
 
     train_targets = torch.tensor(train.targets).to(device)
     valid_targets = torch.tensor(valid.targets).to(device)
@@ -205,6 +235,58 @@ def load_cifar10(device, dtype, data_dir="~/data"):
     train_data = nn.ReflectionPad2d(4)(train_data)
 
     return train_data, train_targets, valid_data, valid_targets
+
+'''
+def load_cifar10(device, dtype,valid_dtype=None, data_dir="~/data"):
+    if valid_dtype is None:
+        valid_dtype = dtype
+    train = torchvision.datasets.CIFAR10(root=data_dir, download=True)
+    valid = torchvision.datasets.CIFAR10(root=data_dir, train=False)
+
+    train_data = preprocess_data_cifar(train.data, device, dtype)
+    valid_data = preprocess_data_cifar(valid.data, device, valid_dtype)
+
+    train_targets = torch.tensor(train.targets).to(device)
+    valid_targets = torch.tensor(valid.targets).to(device)
+
+    # Pad 32x32 to 40x40
+    train_data = nn.ReflectionPad2d(4)(train_data)
+
+    return train_data, train_targets, valid_data, valid_targets
+'''
+
+def load_cifar(device, dtype,valid_dtype=None,n_classes=None, data_dir="~/data"):
+    if valid_dtype is None:
+        valid_dtype = dtype
+    if n_classes == 10:
+        train = torchvision.datasets.CIFAR10(root=data_dir, download=True)
+        valid = torchvision.datasets.CIFAR10(root=data_dir, train=False)
+    elif n_classes == 100:
+        train = torchvision.datasets.CIFAR100(root=data_dir, download=True)
+        valid = torchvision.datasets.CIFAR100(root=data_dir, train=False)
+    else:
+        dutils.pause()
+
+    train_data = preprocess_data_cifar(train.data, device, dtype)
+    valid_data = preprocess_data_cifar(valid.data, device, valid_dtype)
+
+    train_targets = torch.tensor(train.targets).to(device)
+    valid_targets = torch.tensor(valid.targets).to(device)
+
+    # Pad 32x32 to 40x40
+    train_data = nn.ReflectionPad2d(4)(train_data)
+
+    return train_data, train_targets, valid_data, valid_targets
+def load_dataset(dataset,device,dtype,valid_dtype=None):
+    if dataset == 'cifar-10':
+        return load_cifar(device, dtype,valid_dtype=valid_dtype,n_classes=10)
+    elif dataset == 'cifar-100':
+        return load_cifar(device, dtype,valid_dtype=valid_dtype,n_classes=100)
+    elif dataset == 'mnist':
+        return load_mnist(device, dtype,valid_dtype=valid_dtype)
+    else:
+        dutils.pause()
+
 
 
 def update_ema(train_model, valid_model, rho):
@@ -226,6 +308,7 @@ def update_nesterov(weights, lr, weight_decay, momentum):
 
             gradient.add_(weight, alpha=weight_decay).mul_(-lr)
             velocity.mul_(momentum).add_(gradient)
+            #dutils.pause()
             weight.add_(gradient.add_(velocity, alpha=momentum))
 
 
@@ -278,10 +361,12 @@ def main():
         print(f"Mean accuracy: {mean} +- {std}")
         print()
 
+
 def train_one():
     seed = 0
     valid_acc = train(seed)
 
 if __name__ == "__main__":
     #main()
-    train_one()
+    # train_one()
+    main1()
