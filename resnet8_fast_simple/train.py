@@ -6,10 +6,16 @@ import torchvision
 import model
 import dutils
 dutils.init()
+def convert_model_to_dtype(model,dtype):
+    model.to(dtype)
+    # Convert BatchNorm back to single precision for better accuracy
+    for module in model.modules():
+        if isinstance(module, nn.BatchNorm2d):
+            module.float()
 
-def train(seed=0,dataset=dutils.TODO):
+def train(seed=0,dataset=dutils.TODO,epochs=10):
     # Configurable parameters
-    epochs = 10
+    #epochs = 10
     batch_size = 512
     momentum = 0.9
     weight_decay = 0.256
@@ -17,7 +23,7 @@ def train(seed=0,dataset=dutils.TODO):
     ema_update_freq = 5
     ema_rho = 0.99 ** ema_update_freq
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    if False:
+    if True:
         dtype = torch.float16 if device.type != "cpu" else torch.float32
     else:
         dtype = torch.float32
@@ -53,8 +59,7 @@ def train(seed=0,dataset=dutils.TODO):
     # Load dataset
     #train_data, train_targets, valid_data, valid_targets = load_cifar10(device, dtype,valid_dtype=valid_dtype)
     train_data, train_targets, valid_data, valid_targets = load_dataset(dataset,device, dtype,valid_dtype=valid_dtype)
-    #if dutils.hack('use_vgg',default=True):
-    if True:   
+    if dutils.hack('use_vgg',default=False):
         import pytorch_vgg_cifar10.vgg
         train_model= pytorch_vgg_cifar10.vgg.vgg16()
         #dutils.pause()
@@ -62,9 +67,12 @@ def train(seed=0,dataset=dutils.TODO):
         # Compute special weights for first layer
         weights = model.patch_whitening(train_data[:10000, :, 4:-4, 4:-4])
 
-        # Construct the neural network
-        train_model = model.Model(weights, c_in=3, c_out=10, scale_out=0.125)
-
+        # Construct the neural networkload_
+        if dataset in ['cifar-10','mnist']:
+            c_out = 10
+        elif dataset in ['cifar-100']:
+            c_out = 100
+        train_model = model.Model(weights, c_in=3, c_out=c_out, scale_out=0.125)
     # Convert model weights to half precision
     train_model.to(dtype)
 
@@ -160,29 +168,38 @@ def train(seed=0,dataset=dutils.TODO):
         train_time += time.perf_counter() - start_time
 
         valid_correct = []
+        '''
         valid_model.to(valid_dtype)
         # Convert BatchNorm back to single precision for better accuracy
         for module in valid_model.modules():
             if isinstance(module, nn.BatchNorm2d):
                 module.float()
-        valid_model = dutils.hardcode(valid_model = train_model)
+        '''
+        convert_model_to_dtype(valid_model,valid_dtype) 
+               
+        #valid_model = dutils.hardcode(valid_model = train_model)
         for i in range(0, len(valid_data), batch_size):
             valid_model.train(False)
 
             # Test time agumentation: Test model on regular and flipped data
             regular_inputs = valid_data[i : i + batch_size]
-            flipped_inputs = torch.flip(regular_inputs, [-1])
+            if dataset in ['cifar-10','cifar-100']:
+                flipped_inputs = torch.flip(regular_inputs, [-1])
 
-            logits1 = valid_model(regular_inputs).detach()
-            logits2 = valid_model(flipped_inputs).detach()
+                logits1 = valid_model(regular_inputs).detach()
+                logits2 = valid_model(flipped_inputs).detach()
 
-            # Final logits are average of augmented logits
-            logits = torch.mean(torch.stack([logits1, logits2], dim=0), dim=0)
-
+                # Final logits are average of augmented logits
+                logits = torch.mean(torch.stack([logits1, logits2], dim=0), dim=0)
+            else:
+                #TODO: run mnist
+                logits = valid_model(regular_inputs).detach()
             # Compute correct predictions
             correct = logits.max(dim=1)[1] == valid_targets[i : i + batch_size]
 
             valid_correct.append(correct.detach().type(torch.float64))
+        convert_model_to_dtype(valid_model,dtype) 
+        '''
         # Convert model weights to half precision
         valid_model.to(dtype)
 
@@ -190,24 +207,20 @@ def train(seed=0,dataset=dutils.TODO):
         for module in valid_model.modules():
             if isinstance(module, nn.BatchNorm2d):
                 module.float()
-
- 
+        '''
         # Accuracy is average number of correct predictions
         valid_acc = torch.mean(torch.cat(valid_correct)).item()
 
         print(f"{epoch:5} {batch_count:8d} {train_time:19.2f} {valid_acc:22.4f}")
-    dutils.pause()
     mypath = os.path.abspath(__file__)
     mydir = os.path.dirname(mypath)
     savepath = os.path.join(mydir,f'{dataset}_checkpoint.pth')
-    dutils.pause()
     torch.save(valid_model.state_dict(),savepath)
     return valid_acc
 
 def preprocess_data_cifar(data, device, dtype):
     # Convert to torch float16 tensor
     data = torch.tensor(data, device=device).to(dtype)
-
     # Normalize
     mean = torch.tensor([125.31, 122.95, 113.87], device=device).to(dtype)
     std = torch.tensor([62.99, 62.09, 66.70], device=device).to(dtype)
@@ -216,6 +229,20 @@ def preprocess_data_cifar(data, device, dtype):
     # Permute data from NHWC to NCHW format
     data = data.permute(0, 3, 1, 2)
 
+    return data
+def preprocess_data_mnist(data, device, dtype):
+    # Convert to torch float16 tensor
+    data = torch.tensor(data, device=device).to(dtype)
+    #data = torch.cat([data[...,None],data[...,None],data[...,None]],dim=-1)
+    data = data[...,None].repeat(1,1,1,3)
+    # Normalize
+    mean = torch.tensor([0.5*255., 0.5*255,  0.5*255], device=device).to(dtype)
+    std = torch.tensor([ 0.5*255., 0.5*255,  0.5*255], device=device).to(dtype)
+    data = (data - mean) / std
+
+    # Permute data from NHWC to NCHW format
+    data = data.permute(0, 3, 1, 2)
+    data = torch.nn.functional.interpolate(data,(32,32),mode='bilinear',antialias=True)
     return data
 #TODO: cifar preproces mean etc copy from pytorch vgg repo? do it the other way around: copy this to pytorch vgg
 #TODO: preprocess mnist (some 0.13 etc?)
@@ -345,7 +372,7 @@ def main():
     accuracies = []
     threshold = 0.94
     for run in range(100):
-        valid_acc = train(seed=run)
+        valid_acc = train(seed=run,dataset = 'cifar-10')
         accuracies.append(valid_acc)
 
         # Print accumulated results
@@ -363,10 +390,17 @@ def main():
 
 
 def train_one():
-    seed = 0
-    valid_acc = train(seed)
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--seed',type=int,default=0)
+    parser.add_argument('--dataset',type=str,default='cifar-10')
+    parser.add_argument('--epochs',type=int,default=10)
+    args = parser.parse_args()
+    #valid_acc = train(seed,dataset='cifar-10')
+    #valid_acc = train(seed,dataset='mnist')
+    #valid_acc = train(seed,dataset='cifar-100',epochs = 100)
+    valid_acc = train(args.seed,dataset=args.dataset,epochs = args.epochs)
 
 if __name__ == "__main__":
     #main()
-    # train_one()
-    main1()
+    train_one()
+    # main1()
