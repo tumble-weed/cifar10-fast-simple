@@ -12,8 +12,52 @@ def convert_model_to_dtype(model,dtype):
     for module in model.modules():
         if isinstance(module, nn.BatchNorm2d):
             module.float()
+def validate(dataset,valid_model,valid_dtype,dtype,valid_data,valid_targets,batch_size,use_tta=True):
+    valid_correct = []
+    '''
+    valid_model.to(valid_dtype)
+    # Convert BatchNorm back to single precision for better accuracy
+    for module in valid_model.modules():
+        if isinstance(module, nn.BatchNorm2d):
+            module.float()
+    '''
+    convert_model_to_dtype(valid_model,valid_dtype) 
+           
+    #valid_model = dutils.hardcode(valid_model = train_model)
+    for i in range(0, len(valid_data), batch_size):
+        valid_model.train(False)
 
-def train(seed=0,dataset=dutils.TODO,epochs=10):
+        # Test time agumentation: Test model on regular and flipped data
+        regular_inputs = valid_data[i : i + batch_size]
+        if dataset in ['cifar-10','cifar-100'] and use_tta:
+            flipped_inputs = torch.flip(regular_inputs, [-1])
+            logits1 = valid_model(regular_inputs).detach()
+            logits2 = valid_model(flipped_inputs).detach()
+
+            # Final logits are average of augmented logits
+            logits = torch.mean(torch.stack([logits1, logits2], dim=0), dim=0)
+        else:
+            #TODO: run mnist
+            logits = valid_model(regular_inputs).detach()
+        # Compute correct predictions
+        correct = logits.max(dim=1)[1] == valid_targets[i : i + batch_size]
+
+        valid_correct.append(correct.detach().type(torch.float64))
+    convert_model_to_dtype(valid_model,dtype) 
+    '''
+    # Convert model weights to half precision
+    valid_model.to(dtype)
+
+    # Convert BatchNorm back to single precision for better accuracy
+    for module in valid_model.modules():
+        if isinstance(module, nn.BatchNorm2d):
+            module.float()
+    '''
+    # Accuracy is average number of correct predictions
+    valid_acc = torch.mean(torch.cat(valid_correct)).item()
+    return valid_correct, valid_acc
+
+def train(seed=0,dataset=dutils.TODO,epochs=10,evaluate=False,use_tta=True):
     # Configurable parameters
     #epochs = 10
     batch_size = 512
@@ -105,6 +149,15 @@ def train(seed=0,dataset=dutils.TODO,epochs=10):
     print("\nepoch    batch    train time [sec]    validation accuracy")
     train_time = 0.0
     batch_count = 0
+    if evaluate:
+        mypath = os.path.abspath(__file__)
+        mydir = os.path.dirname(mypath)
+        loadpath = os.path.join(mydir,f'{dataset}_checkpoint.pth')
+        train_model.load_state_dict(torch.load(loadpath))
+        valid_model = copy.deepcopy(train_model)
+        valid_correct,valid_acc = validate(dataset,valid_model,valid_dtype,dtype,valid_data,valid_targets,batch_size,use_tta=use_tta)
+        print(f'validation accuracy {valid_acc}')
+        return 0
     for epoch in range(1, epochs + 1):
         # Flush CUDA pipeline for more accurate time measurement
         if torch.cuda.is_available():
@@ -166,51 +219,8 @@ def train(seed=0,dataset=dutils.TODO,epochs=10):
 
         # Add training time
         train_time += time.perf_counter() - start_time
-
-        valid_correct = []
-        '''
-        valid_model.to(valid_dtype)
-        # Convert BatchNorm back to single precision for better accuracy
-        for module in valid_model.modules():
-            if isinstance(module, nn.BatchNorm2d):
-                module.float()
-        '''
-        convert_model_to_dtype(valid_model,valid_dtype) 
-               
-        #valid_model = dutils.hardcode(valid_model = train_model)
-        for i in range(0, len(valid_data), batch_size):
-            valid_model.train(False)
-
-            # Test time agumentation: Test model on regular and flipped data
-            regular_inputs = valid_data[i : i + batch_size]
-            if dataset in ['cifar-10','cifar-100']:
-                flipped_inputs = torch.flip(regular_inputs, [-1])
-
-                logits1 = valid_model(regular_inputs).detach()
-                logits2 = valid_model(flipped_inputs).detach()
-
-                # Final logits are average of augmented logits
-                logits = torch.mean(torch.stack([logits1, logits2], dim=0), dim=0)
-            else:
-                #TODO: run mnist
-                logits = valid_model(regular_inputs).detach()
-            # Compute correct predictions
-            correct = logits.max(dim=1)[1] == valid_targets[i : i + batch_size]
-
-            valid_correct.append(correct.detach().type(torch.float64))
-        convert_model_to_dtype(valid_model,dtype) 
-        '''
-        # Convert model weights to half precision
-        valid_model.to(dtype)
-
-        # Convert BatchNorm back to single precision for better accuracy
-        for module in valid_model.modules():
-            if isinstance(module, nn.BatchNorm2d):
-                module.float()
-        '''
-        # Accuracy is average number of correct predictions
-        valid_acc = torch.mean(torch.cat(valid_correct)).item()
-
+        
+        valid_correct,valid_acc=validate(dataset,valid_model,valid_dtype,dtype,valid_data,valid_targets,batch_size,use_tta=use_tta)
         print(f"{epoch:5} {batch_count:8d} {train_time:19.2f} {valid_acc:22.4f}")
     mypath = os.path.abspath(__file__)
     mydir = os.path.dirname(mypath)
@@ -394,11 +404,13 @@ def train_one():
     parser.add_argument('--seed',type=int,default=0)
     parser.add_argument('--dataset',type=str,default='cifar-10')
     parser.add_argument('--epochs',type=int,default=10)
+    parser.add_argument('--use_tta',type=lambda t:t.lower() == 'true',default=True)
+    parser.add_argument('--evaluate',type=lambda t:t.lower() == 'true',default=False)
     args = parser.parse_args()
     #valid_acc = train(seed,dataset='cifar-10')
     #valid_acc = train(seed,dataset='mnist')
     #valid_acc = train(seed,dataset='cifar-100',epochs = 100)
-    valid_acc = train(args.seed,dataset=args.dataset,epochs = args.epochs)
+    valid_acc = train(args.seed,dataset=args.dataset,epochs = args.epochs,evaluate=args.evaluate,use_tta=args.use_tta)
 
 if __name__ == "__main__":
     #main()
