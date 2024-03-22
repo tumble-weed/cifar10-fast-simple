@@ -61,20 +61,20 @@ class GhostBatchNorm(nn.BatchNorm2d):
             )
 
 
-def conv_bn_relu(c_in, c_out, kernel_size=(3, 3), padding=(1, 1)):
+def conv_bn_relu(c_in, c_out, kernel_size=(3, 3), padding=(1, 1),non_lin='celu'):
     return nn.Sequential(
         nn.Conv2d(c_in, c_out, kernel_size=kernel_size, padding=padding, bias=False),
         GhostBatchNorm(c_out, num_splits=16),
-        nn.CELU(alpha=0.3),
+        {'celu':nn.CELU(alpha=0.3),'relu':nn.ReLU()}[non_lin],
     )
 
 
-def conv_pool_norm_act(c_in, c_out):
+def conv_pool_norm_act(c_in, c_out,non_lin='celu'):
     return nn.Sequential(
         nn.Conv2d(c_in, c_out, kernel_size=(3, 3), padding=(1, 1), bias=False),
         nn.MaxPool2d(kernel_size=2, stride=2),
         GhostBatchNorm(c_out, num_splits=16),
-        nn.CELU(alpha=0.3),
+        {'celu':nn.CELU(alpha=0.3),'relu':nn.ReLU()}[non_lin],
     )
 
 
@@ -102,7 +102,7 @@ def patch_whitening(data, patch_size=(3, 3)):
 
 
 class ResNetBagOfTricks(nn.Module):
-    def __init__(self, first_layer_weights, c_in, c_out, scale_out):
+    def __init__(self, first_layer_weights, c_in, c_out, scale_out,non_lin='celu'):
         super().__init__()
 
         c = first_layer_weights.size(0)
@@ -112,14 +112,14 @@ class ResNetBagOfTricks(nn.Module):
         conv1.weight.requires_grad = False
 
         self.conv1 = conv1
-        self.conv2 = conv_bn_relu(c, 64, kernel_size=(1, 1), padding=0)
-        self.conv3 = conv_pool_norm_act(64, 128)
-        self.conv4 = conv_bn_relu(128, 128)
-        self.conv5 = conv_bn_relu(128, 128)
-        self.conv6 = conv_pool_norm_act(128, 256)
-        self.conv7 = conv_pool_norm_act(256, 512)
-        self.conv8 = conv_bn_relu(512, 512)
-        self.conv9 = conv_bn_relu(512, 512)
+        self.conv2 = conv_bn_relu(c, 64, kernel_size=(1, 1), padding=0,non_lin=non_lin)
+        self.conv3 = conv_pool_norm_act(64, 128,non_lin=non_lin)
+        self.conv4 = conv_bn_relu(128, 128,non_lin=non_lin)
+        self.conv5 = conv_bn_relu(128, 128,non_lin=non_lin)
+        self.conv6 = conv_pool_norm_act(128, 256,non_lin=non_lin)
+        self.conv7 = conv_pool_norm_act(256, 512,non_lin=non_lin)
+        self.conv8 = conv_bn_relu(512, 512,non_lin=non_lin)
+        self.conv9 = conv_bn_relu(512, 512,non_lin=non_lin)
         self.pool10 = nn.MaxPool2d(kernel_size=4, stride=4)
         self.linear11 = nn.Linear(512, c_out, bias=False)
         self.scale_out = scale_out

@@ -56,8 +56,14 @@ def validate(dataset,valid_model,valid_dtype,dtype,valid_data,valid_targets,batc
     # Accuracy is average number of correct predictions
     valid_acc = torch.mean(torch.cat(valid_correct)).item()
     return valid_correct, valid_acc
+def get_checkpoint_savename(dataset,non_lin):
+    non_lin_stub = ''
+    if non_lin != 'celu':
+        non_lin_stub = f'_{non_lin}'
+    savename = f'{dataset}{non_lin_stub}_checkpoint.pth'
+    return savename
 
-def train(seed=0,dataset=dutils.TODO,epochs=10,evaluate=False,use_tta=True):
+def train(seed=0,dataset=dutils.TODO,epochs=10,evaluate=False,use_tta=True,non_lin='celu'):
     # Configurable parameters
     #epochs = 10
     batch_size = 512
@@ -116,8 +122,9 @@ def train(seed=0,dataset=dutils.TODO,epochs=10,evaluate=False,use_tta=True):
             c_out = 10
         elif dataset in ['cifar-100']:
             c_out = 100
-        train_model = model.Model(weights, c_in=3, c_out=c_out, scale_out=0.125)
+        train_model = model.Model(weights, c_in=3, c_out=c_out, scale_out=0.125,non_lin=non_lin)
     # Convert model weights to half precision
+    #p47()
     train_model.to(dtype)
 
     # Convert BatchNorm back to single precision for better accuracy
@@ -152,7 +159,8 @@ def train(seed=0,dataset=dutils.TODO,epochs=10,evaluate=False,use_tta=True):
     if evaluate:
         mypath = os.path.abspath(__file__)
         mydir = os.path.dirname(mypath)
-        loadpath = os.path.join(mydir,f'{dataset}_checkpoint.pth')
+        #loadpath = os.path.join(mydir,f'{dataset}_checkpoint.pth')
+        loadpath= os.path.join(mydir,get_checkpoint_savename(dataset,non_lin))
         train_model.load_state_dict(torch.load(loadpath))
         valid_model = copy.deepcopy(train_model)
         valid_correct,valid_acc = validate(dataset,valid_model,valid_dtype,dtype,valid_data,valid_targets,batch_size,use_tta=use_tta)
@@ -224,7 +232,8 @@ def train(seed=0,dataset=dutils.TODO,epochs=10,evaluate=False,use_tta=True):
         print(f"{epoch:5} {batch_count:8d} {train_time:19.2f} {valid_acc:22.4f}")
     mypath = os.path.abspath(__file__)
     mydir = os.path.dirname(mypath)
-    savepath = os.path.join(mydir,f'{dataset}_checkpoint.pth')
+    #savepath = os.path.join(mydir,f'{dataset}_checkpoint.pth')
+    savepath= os.path.join(mydir,get_checkpoint_savename(dataset,non_lin))
     torch.save(valid_model.state_dict(),savepath)
     return valid_acc
 
@@ -405,12 +414,13 @@ def train_one():
     parser.add_argument('--dataset',type=str,default='cifar-10')
     parser.add_argument('--epochs',type=int,default=10)
     parser.add_argument('--use_tta',type=lambda t:t.lower() == 'true',default=True)
+    parser.add_argument('--non_lin',type=str,default='celu')
     parser.add_argument('--evaluate',type=lambda t:t.lower() == 'true',default=False)
     args = parser.parse_args()
     #valid_acc = train(seed,dataset='cifar-10')
     #valid_acc = train(seed,dataset='mnist')
     #valid_acc = train(seed,dataset='cifar-100',epochs = 100)
-    valid_acc = train(args.seed,dataset=args.dataset,epochs = args.epochs,evaluate=args.evaluate,use_tta=args.use_tta)
+    valid_acc = train(args.seed,dataset=args.dataset,epochs = args.epochs,evaluate=args.evaluate,use_tta=args.use_tta,non_lin=args.non_lin)
 
 if __name__ == "__main__":
     #main()
